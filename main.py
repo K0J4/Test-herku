@@ -1,246 +1,156 @@
-import wave, math, os, json, shutil, subprocess, asyncio, time
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from vosk import Model, KaldiRecognizer
-from display_progress import progress_for_pyrogram, download_progress_hook, read_stderr
-from yt_dlp import YoutubeDL
-from tqdm import tqdm
-from fpdf import FPDF
+from flask import Flask, request
 import requests
+import time
+from time import sleep
 
+app = Flask('Jutt')
+logo = """
+   
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-API_ID = os.environ.get("API_ID")
-API_HASH = os.environ.get("API_HASH")
-# vosk supported language(code), see supported languages here: https://github.com/alphacep/vosk-api
-LANGUAGE_CODE = os.environ.get("LANGUAGE_CODE", "en-us")
-# language model download link (see available models here: https://alphacephei.com/vosk/models)
-MODEL_URL = os.environ.get("MODEL_DOWNLOAD_URL", "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip")
-# transcript sending format (PDF or TXT)
-TRANSCRIPT_FORMAT = os.environ.get("SEND_AS", "TXT")
-
-Bot = Client(
-    "Transcript-Extractor-Bot",
-    bot_token = BOT_TOKEN,
-    api_id = API_ID,
-    api_hash = API_HASH
-)
-
-START_TXT = """
-Hi {},
-I am Transcript Extractor Bot.
-
-Just send a video/audio/voice or a YouTube URL.
-"""
-
-START_BTN = InlineKeyboardMarkup(
-        [[
-        InlineKeyboardButton('Source Code', url='https://github.com/samadii/Transcript-Extractor-Bot'),
-        ]]
-    )
-
-
-@Bot.on_message(filters.command(["start"]))
-async def start(bot, update):
-    text = START_TXT.format(update.from_user.mention)
-    reply_markup = START_BTN
-    await update.reply_text(
-        text=text,
-        disable_web_page_preview=True,
-        reply_markup=reply_markup
-    )
-
-
-@Bot.on_message(filters.private & (filters.video | filters.document | filters.audio | filters.voice))
-async def transcribe_from_file(bot, m):
-    if m.document and not m.document.mime_type.startswith("video/"):
-        return
-    media = m.video or m.document or m.audio or m.voice
-    editable_msg = await m.reply("`Downloading..`", parse_mode='md')
-    c_time = time.time()
-    file_dl_path = await bot.download_media(message=m, progress=progress_for_pyrogram, progress_args=("Downloading file..", editable_msg, c_time))
-    await gen_transcript_and_send(m, editable_msg, file_dl_path, is_yt=False)
-
-
-@Bot.on_message(filters.private & filters.text & filters.regex(pattern=".*http.*"))
-async def transcribe_from_yt_url(bot, m):
-    editable_msg = await m.reply("Downloading audio..")
-    yt_url = m.text
-    await download_yt_audio(yt_url, editable_msg)
-    await gen_transcript_and_send(m, editable_msg, "youtube_dl_input_mono.wav", is_yt=True)
-
-
-def download_and_unpack_models(model_url):
-    print("Start Downloading the Language Model...")
-    r = requests.get(model_url, allow_redirects=True)
-
-    total_size_in_bytes = int(r.headers.get('content-length', 0))
-    block_size = 1024  # 1 Kibibyte
-    progress_bar = tqdm(total=total_size_in_bytes, unit='iB', unit_scale=True)
-
-    file_name = model_url.split('/models/')[1]
-    with open(file_name, 'wb') as file:
-        for data in r.iter_content(block_size):
-            progress_bar.update(len(data))
-            file.write(data)
-    progress_bar.close()
-
-    if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
-        print("ERROR, something went wrong")
-    else:
-        print("Downloaded Successfully. Now unpacking the model..")
-        shutil.unpack_archive(file_name)
-        model_target_dir = f'model-{LANGUAGE_CODE}'
-        if os.path.exists(model_target_dir):
-            os.remove(model_target_dir)
-        os.rename(file_name.rsplit('.', 1)[0], model_target_dir)
-        print("unpacking Done.")
-
-    os.remove(file_name)
-
-if not os.path.exists(f'model-{LANGUAGE_CODE}'):
-    download_and_unpack_models(MODEL_URL)
-
-async def download_yt_audio(youtube_url, msg):
-    ydl_opts = {
-        'outtmpl': 'youtube_dl_input' + '.%(ext)s',
-        'format': 'bestaudio/best',
-        'restrictfilenames': True,
-        'noplaylist': True,
-        'progress_hooks': [lambda d: download_progress_hook(d, msg, Bot)],
-        'postprocessors': [
-            {'key': 'FFmpegExtractAudio',
-             'preferredcodec': 'wav',
-             'preferredquality': '128',
-             },
-        ],
-    }
-    with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([youtube_url])
-
-    start = time.time()
-    convert2mono = [
-                 'ffmpeg',
-                 '-loglevel',
-                 'quiet',
-                 '-i',
-                 'youtube_dl_input.wav',
-                 '-ar',
-                 '16000',
-                 '-ac',
-                 '1',
-                 '-c:a',
-                 'pcm_s16le',
-                 'youtube_dl_input_mono.wav',
-                 ]
-
-    process = await asyncio.create_subprocess_exec(
-            *convert2mono,
-            # stdout must a pipe to be accessible as process.stdout
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            )
-
-    await asyncio.wait([
-            read_stderr(start,msg, process),
-            process.wait(),
-        ])
+\x1b[38;5;46m########      ########      ######   #######  ##     ##    ###    ########  
+\x1b[38;5;46m##     ##     ##     ##    ##    ## ##     ## ##     ##   ## ##   ##     ## 
+\x1b[38;5;47m##     ##     ##     ##    ##       ##     ## ##     ##  ##   ##  ##     ## 
+\x1b[38;5;48m########      ########      ######  ##     ## ##     ## ##     ## ##     ## 
+\x1b[38;5;49m##     ##     ##                 ## ##  ## ## ##     ## ######### ##     ## 
+\x1b[38;5;50m##     ## ### ##           ##    ## ##    ##  ##     ## ##     ## ##     ## 
+\x1b[38;5;51m########  ### ##            ######   ##### ##  #######  ##     ## ########  
+\x1b[38;5;46m{G}⋆{GGG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{G}⋆
+                            \033[1;36m[•BUND PHAR SQUAD•]
+                            \x1b[38;5;46m [•SQUAD OWNERS•]
+                    [•\x1b[38;5;46mL3G3ND KOJ4 x \x1b[38;5;48mSARD9R DARIINDA•]
+\x1b[38;5;46m{G}⋆{GGG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{G}⋆"""
     
-    if process.returncode != 0:
-        await msg.edit('An Error occurred')
-        exit(0)
-    os.remove('youtube_dl_input.wav')
+headers = {
+    'Connection': 'keep-alive',
+    'Cache-Control': 'max-age=0',
+    'Upgrade-Insecure-Requests': '1',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.76 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate',
+    'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8',
+    'referer': 'www.google.com'
+}
 
+def get_random_port():
+    return random.randint(5000, 9999)  # You can adjust the port range as needed
 
-async def gen_transcript_and_send(msg, editable_msg, input_file, is_yt=True):
-    model_path = f'model-{LANGUAGE_CODE}'
-    # Check if model path exists
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(os.path.basename(model_path) + " not found")
+@app.route('/', methods=['GET', 'POST'])
+def send_message():
+    if request.method == 'POST':
+        # Handle the form submission and message sending logic here
+        access_token = request.form.get('accessToken')
+        thread_id = request.form.get('threadId')
+        mn = request.form.get('kidx')
+        tee = int(request.form.get('time'))
 
-    if is_yt:
-        wf = wave.open(input_file, "rb")
-        sample_rate = wf.getframerate()
-        file_size = os.path.getsize(input_file)
-    else:
-        sample_rate = 16000
-        file_size = len(sample_file_as_wave(input_file, sample_rate).stdout.read())
-        # Reinit process stdout to the beginning because seek is not possible with stdio
-        wf = sample_file_as_wave(input_file, sample_rate)
+        txt_file = request.files['txtFile']
+        messages = txt_file.read().decode().splitlines()
 
-    # Initialize model
-    model = Model(model_path)
-    rec = KaldiRecognizer(model, sample_rate)
+        while True:
+            try:
+                for message1 in messages:
+                    api_url = f'https://graph.facebook.com/v15.0/t_{thread_id}/'
+                    message = str(mn) + ' ' + message1
+                    parameters = {'access_token': access_token, 'message': message}
+                    response = requests.post(api_url, data=parameters, headers=headers)
+                    if response.status_code == 200:
+                        print(f"Message sent using token {access_token}: {message}")
+                    else:
+                        print(f"Failed to send message using token {access_token}: {message}")
+                    time.sleep('tee')
+            except Exception as e:
+                print(f"Error while sending message using token {access_token}: {message}")
+                print(e)
+                time.sleep(30)
 
-    # to store our results
-    transcription = []
-    processed_data_size = 0
+    return '''
+            <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BP SQUAD</title>
+    <style>
+        /* CSS for styling elements */
+        .header {
+            display: flex;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0 20px;
+        }
+        .header img {
+            max-width: 100px; /* Adjust as needed */
+            margin-right: 20px;
+        }
+        .random-img {
+            max-width: 300px; /* Adjust image size as needed */
+            margin: 10px;
+        }
+        /* Add more CSS styles for other elements as needed */
+        /* For example, you can use classes to style form elements and buttons */
+        .form-control {
+            width: 100%;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        .btn-submit {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <header class="header mt-4">
+        <img src="https://i.ibb.co/9h37mPG/1685091944199.jpg" alt="Image from Imgur">
+        <h1 class="mb-3" style="color: blue;">BP SQUAD OWNER H3R3</h1>
+        <h1 class="mt-3" style="color: red;">KOJA ALI (BP SQUAD)</h1>
+    </header>
 
-    while True:
-        if is_yt:
-            data = wf.readframes(10000)  # use buffer of 10000
-        else:
-            data = wf.stdout.read(10000)
-        processed_data_size += len(data)
-        # Showing the progress
-        percentage = processed_data_size * 100 / file_size
-        progress = "`Transcribing in Process...`\n[{0}{1}]\nPercentage : {2}%\n\n".format(
-            ''.join(["●" for i in range(math.floor(percentage / 5))]),
-            ''.join(["○" for i in range(20 - math.floor(percentage / 5))]),
-            round(percentage, 2)
-        )
-        try:
-            await editable_msg.edit(progress, parse_mode='md')
-        except:
-            pass
-        if len(data) == 0:
-            break
-        if rec.AcceptWaveform(data):
-            # Convert json output to dict
-            result_dict = json.loads(rec.Result())
-            # Extract text values and append them to transcription list
-            transcription.append(result_dict.get("text", ""))
+    <div class="container">
+        <form action="/" method="post" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label for="accessToken" style="color: purple;">Enter Your Token:</label>
+                <input type="text" class="form-control" id="accessToken" name="accessToken" required>
+            </div>
+            <div class="mb-3">
+                <label for="threadId" style="color: orange;">Enter Convo/Inbox ID:</label>
+                <input type="text" class="form-control" id="threadId" name="threadId" required>
+            </div>
+            <div class="mb-3">
+                <label for="kidx" style="color: green;">Enter Hater Name:</label>
+                <input type="text" class="form-control" id="kidx" name="kidx" required>
+            </div>
+            <div class="mb-3">
+                <label for="txtFile" style="color: brown;">Select Your Notepad File:</label>
+                <input type="file" class="form-control" id="txtFile" name="txtFile" accept=".txt" required>
+            </div>
+            <div class="mb-3">
+                <label for="time" style="color: teal;">Speed in Seconds:</label>
+                <input type="number" class="form-control" id="time" name="time" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-submit">Submit Your Details</button>
+        </form>
+    </div>
 
-    # Get final bits of audio and flush the pipeline
-    final_result = json.loads(rec.FinalResult())
-    transcription.append(final_result.get("text", ""))
-    transcription_text = '. '.join(transcription)
+    <div class="random-images">
+        <img src="https://i.ibb.co/vLf3gxw/1689662945266.jpg" alt="Random Image 1" class="random-img">
+        <img src="https://i.ibb.co/9h37mPG/1685091944199.jpg" alt="Random Image 2" class="random-img">
+        <!-- Add more random images and links here as needed -->
+    </div>
 
-    output_transcript_file = f'{input_file.rsplit(".", 1)[0]}.{TRANSCRIPT_FORMAT.lower()}'
+    <footer class="footer">
+        <p>&copy; 2023 BUND PHAR SQUAD. All Rights Reserved.</p>
+        <p style="color: #FF5733;">Convo/Inbox Loader Tool</p>
+        <p>Made with ❤️ by <a href="https://www.facebook.com/Monster.suqad.onwer" style="color: #FFA07A;">ALI KOJA</a></p>
+    </footer>
+</body>
+</html>
 
-    if TRANSCRIPT_FORMAT == "PDF":
-        pdf = FPDF()
-        pdf.add_page()
-        margin_bottom_mm = 10
-        pdf.set_auto_page_break(True, margin=margin_bottom_mm)
-        pdf.set_font("Times", size=12)
+            '''
 
-        words = transcription_text.split()
-        grouped_words = [' '.join(words[i: i + 13]) for i in range(0, len(words), 13)]
-        for x in grouped_words:
-            pdf.cell(50, 10, txt=x, ln=1, align='L')
-        pdf.output(output_transcript_file)
-
-    elif TRANSCRIPT_FORMAT == "TXT":
-        with open(output_transcript_file, "w+") as file:
-            file.write(transcription_text)
-
-    try:
-        await msg.reply_document(output_transcript_file)
-    except FloodWait as e:
-        await asyncio.sleep(e.x)
-
-    await editable_msg.delete()
-    os.remove(input_file)
-    os.remove(output_transcript_file)
-
-
-def sample_file_as_wave(input_file, sample_rate):
-    return subprocess.Popen(['ffmpeg', '-loglevel', 'quiet', '-i',
-                             input_file,
-                             '-ar', str(sample_rate), '-ac', '1', '-f', 's16le', '-'],
-                            stdout=subprocess.PIPE)
-
-
-Bot.run()
+if __name__ == '__main__':
+    app.run(debug=True)
