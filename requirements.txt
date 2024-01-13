@@ -1,7 +1,2 @@
-pyrogram
-tgcrypto
+flask
 requests
-fpdf
-tqdm
-vosk
-yt-dlp
